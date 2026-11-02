@@ -176,7 +176,10 @@ export interface NowPlayingTitles {
   lyric?: string
 }
 export const updateNowPlayingTitles = async(titles: NowPlayingTitles) => {
-  // console.log('set playing titles', titles)
+  // 该方法是 lyswhut fork 为 Android 增加的，用于把歌词塞进通知栏/蓝牙信息，
+  // iOS 原生端（RNTrackPlayer）没有实现，直接调用会抛 "is not a function"。
+  // iOS 的锁屏信息走 updateNowPlayingMetadata，不需要这里。
+  if (Platform.OS === 'ios') return
   return TrackPlayer.updateNowPlayingTitles(titles)
 }
 

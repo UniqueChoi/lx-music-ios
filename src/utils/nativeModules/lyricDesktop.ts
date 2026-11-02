@@ -1,6 +1,20 @@
 import { NativeModules, NativeEventEmitter } from 'react-native'
 
-const { LyricModule } = NativeModules
+const { LyricModule: LyricModuleNative } = NativeModules
+
+/**
+ * iOS 上没有 LyricModule —— iOS 不允许第三方 App 创建全局悬浮窗，
+ * 桌面歌词功能在 iOS 端整体不可用（设置项也已隐藏）。
+ *
+ * 但播放器初始化等流程仍会调用到这里的导出的函数（例如 setPlaybackRate），
+ * 如果直接使用 undefined 会抛 "Cannot read property 'xxx' of null" 导致启动失败。
+ * 因此用一个空实现顶替，让所有调用变成无副作用的 no-op。
+ */
+const LyricModule: any = LyricModuleNative ?? new Proxy({}, {
+  get: () => async() => {},
+})
+
+export const isLyricModuleAvailable = LyricModuleNative != null
 
 // export const themes = [
 //   { id: 'green', value: '#07c556' },
@@ -218,6 +232,7 @@ export const openOverlayPermissionActivity = async(): Promise<void> => {
 }
 
 export const onPositionChange = (handler: (position: { x: number, y: number }) => void): () => void => {
+  if (!isLyricModuleAvailable) return () => {}
   // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
   const eventEmitter = new NativeEventEmitter(LyricModule)
   const eventListener = eventEmitter.addListener('set-position', event => {
@@ -230,6 +245,7 @@ export const onPositionChange = (handler: (position: { x: number, y: number }) =
 }
 
 export const onLyricLinePlay = (handler: (lineInfo: { text: string, extendedLyrics: string[] }) => void): () => void => {
+  if (!isLyricModuleAvailable) return () => {}
   // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
   const eventEmitter = new NativeEventEmitter(LyricModule)
   const eventListener = eventEmitter.addListener('lyric-line-play', event => {
