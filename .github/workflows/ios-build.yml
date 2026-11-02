@@ -17,6 +17,14 @@ on:
           - macos-14
           - macos-15
           - macos-13
+      build_type:
+        description: 'release=日常使用（JS 打进包里）；debug=开发调试（连 Metro，改 JS 免重装）'
+        required: false
+        default: 'release'
+        type: choice
+        options:
+          - release
+          - debug
   push:
     branches: [master, dev]
     paths:
@@ -112,10 +120,15 @@ jobs:
           set -o pipefail
           rm -rf build
           mkdir -p build
+          # debug 构建不含 JS bundle，启动时连 Metro（改 JS 免重装）；
+          # release 构建把 JS 打进 main.jsbundle，可离线独立运行。
+          CONFIG=$([ "${{ github.event.inputs.build_type }}" = "debug" ] && echo Debug || echo Release)
+          echo "BUILD_CONFIG=$CONFIG" >> "$GITHUB_ENV"
+          echo "构建配置: $CONFIG"
           xcodebuild \
             -workspace LxMusicMobile.xcworkspace \
             -scheme LxMusicMobile \
-            -configuration Release \
+            -configuration "$CONFIG" \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -archivePath build/LxMusicMobile.xcarchive \
@@ -137,13 +150,16 @@ jobs:
             find build -maxdepth 4 -name '*.app' -print || true
             exit 1
           fi
+          SUFFIX=$([ "$BUILD_CONFIG" = "Debug" ] && echo debug || echo release)
+          IPA="LxMusicMobile-${SUFFIX}.ipa"
           rm -rf build/Payload
           mkdir -p build/Payload
           cp -R "$APP" build/Payload/
-          (cd build && zip -qry LxMusicMobile-unsigned.ipa Payload)
+          (cd build && zip -qry "$IPA" Payload)
           rm -rf build/Payload
-          ls -lh build/LxMusicMobile-unsigned.ipa
-          echo "IPA_SIZE=$(du -h build/LxMusicMobile-unsigned.ipa | cut -f1)" >> "$GITHUB_ENV"
+          ls -lh "build/$IPA"
+          echo "IPA_NAME=$IPA" >> "$GITHUB_ENV"
+          echo "IPA_SIZE=$(du -h "build/$IPA" | cut -f1)" >> "$GITHUB_ENV"
 
       - name: Job summary
         if: success()
@@ -153,25 +169,33 @@ jobs:
             echo ""
             echo "| 项 | 值 |"
             echo "|---|---|"
-            echo "| 产物 | \`LxMusicMobile-unsigned.ipa\` |"
+            echo "| 产物 | \`${{ env.IPA_NAME }}\` |"
+            echo "| 配置 | \`${{ env.BUILD_CONFIG }}\` |"
             echo "| 大小 | ${{ env.IPA_SIZE }} |"
             echo "| Runner | \`${{ github.event.inputs.runner_image || 'macos-14' }}\` |"
             echo "| Commit | \`${{ github.sha }}\` |"
             echo ""
             echo "### 下一步"
-            echo "1. 在本页底部 Artifacts 下载 \`LxMusicMobile-unsigned-ipa\`"
+            echo "1. 在本页底部 Artifacts 下载 \`${{ env.IPA_NAME }}\` 对应的包"
             echo "2. Windows 上打开 Sideloadly，用 Apple ID 登录"
             echo "3. 拖入 ipa → 连接 iPhone → Start"
             echo "4. iPhone 设置 → 通用 → VPN与设备管理 → 信任证书"
             echo ""
-            echo "> 免费 Apple ID 签名有效期 7 天，到期重签即可。"
+            if [ "$BUILD_CONFIG" = "Debug" ]; then
+              echo "> **这是调试版**：启动时会连接 Metro。"
+              echo "> 先在电脑上运行 \`npx react-native start\`，"
+              echo "> 再在手机上摇一摇 → Dev Settings → Debug server host 填 \`电脑IP:8081\`。"
+              echo "> 之后改 JS 会热更新，不需要重装。"
+            else
+              echo "> 免费 Apple ID 签名有效期 7 天，到期重签即可。"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload unsigned ipa
         uses: actions/upload-artifact@v4
         with:
-          name: LxMusicMobile-unsigned-ipa
-          path: ios/build/LxMusicMobile-unsigned.ipa
+          name: ${{ env.IPA_NAME }}
+          path: ios/build/*.ipa
           if-no-files-found: error
           retention-days: 14
 
