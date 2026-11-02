@@ -1,7 +1,11 @@
 // import { requestStoragePermission } from '@/utils/common'
-import { temporaryDirectoryPath, existsFile, appendFile, unlink, writeFile, readFile } from '@/utils/fs'
+import { temporaryDirectoryPath, privateStorageDirectoryPath, existsFile, appendFile, unlink, writeFile, readFile } from '@/utils/fs'
+import { Platform } from 'react-native'
 
-const logPath = temporaryDirectoryPath + '/error.log'
+// iOS 上把错误日志写到 Documents 而不是 Caches：
+// Caches 不会出现在系统「文件」App 里，出问题时无法把日志取出来分析。
+// Documents 已通过 Info.plist 的 UIFileSharingEnabled 对外可见。
+const logPath = (Platform.OS === 'ios' ? privateStorageDirectoryPath : temporaryDirectoryPath) + '/error.log'
 
 const logTools = {
   tempLog: [] as Array<{ time: string, type: 'LOG' | 'WARN' | 'ERROR', text: string }> | null,

@@ -10,6 +10,7 @@
  */
 import RNFS from 'react-native-fs'
 import pako from 'pako'
+import { NativeModules } from 'react-native'
 import { Buffer } from '@craftzdog/react-native-buffer'
 import type { Encoding, HashAlgorithm, OpenDocumentOptions } from 'react-native-file-system'
 
@@ -25,13 +26,28 @@ export const externalStorageDirectoryPath = RNFS.DocumentDirectoryPath
 // iOS 没有可枚举的外置存储，返回空数组即可让「选择存储位置」UI 自然降级
 export const getExternalStoragePaths = async(_isRemovable?: boolean): Promise<Array<{ path: string, isRemovable: boolean, isExternal: boolean }>> => []
 
-// ---- Android SAF 对应能力：iOS 上不可用，调用时给出明确错误而不是静默失败 ----
+// ---- Android SAF 对应能力 ----
 const notSupported = (name: string): never => {
   throw new Error(`[iOS] ${name} 在 iOS 上不可用（Android Scoped Storage API），请改用 Files App 导入`)
 }
 
+/**
+ * 选择文件。iOS 用系统文档选择器（UIDocumentPickerViewController）。
+ * 返回结构与 Android 的 AndroidScoped.openDocument 保持一致：{ data: 路径, name: 文件名 }。
+ * 取消选择时返回 null。
+ */
+export const selectFile = async(_options?: OpenDocumentOptions): Promise<{ data: string, name: string } | null> => {
+  const { UtilsModule } = NativeModules
+  if (UtilsModule?.pickDocument == null) throw new Error('[iOS] 文件选择器不可用')
+
+  const path = await UtilsModule.pickDocument() as string | null
+  if (!path) return null
+
+  const name = path.substring(path.lastIndexOf('/') + 1)
+  return { data: path, name }
+}
+
 export const selectManagedFolder = async(_isPersist: boolean = false): Promise<string> => notSupported('selectManagedFolder')
-export const selectFile = async(_options?: OpenDocumentOptions): Promise<string> => notSupported('selectFile')
 export const removeManagedFolder = async(_path: string): Promise<void> => notSupported('removeManagedFolder')
 export const getManagedFolders = async(): Promise<Array<{ path: string, name: string }>> => []
 export const getPersistedUriList = async(): Promise<string[]> => []

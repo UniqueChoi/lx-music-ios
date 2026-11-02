@@ -13,6 +13,7 @@
 
 #import <UIKit/UIKit.h>
 #import <UserNotifications/UserNotifications.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <ifaddrs.h>
 #import <arpa/inet.h>
 #import <net/if.h>
@@ -23,6 +24,10 @@ static NSString *const kWindowSizeEvent = @"screen-size-changed";
 
 @interface LxUtilsModule ()
 @property (nonatomic, assign) BOOL hasListeners;
+// 文件选择器的回调需要用属性持有，否则出栈即被释放
+@property (nonatomic, copy, nullable) RCTPromiseResolveBlock pickResolve;
+@property (nonatomic, copy, nullable) RCTPromiseRejectBlock pickReject;
+- (UIViewController *)topViewController;
 @end
 
 @implementation LxUtilsModule
@@ -317,6 +322,71 @@ RCT_EXPORT_METHOD(shareText:(NSString *)shareTitle
     controller = controller.presentedViewController;
   }
   return controller;
+}
+
+#pragma mark - 文件选择（替代 Android 的 SAF）
+
+/// 打开系统文档选择器，返回选中文件在沙盒内的绝对路径。
+/// 对应 Android 的 AndroidScoped.openDocument，供自定义源导入、备份导入使用。
+RCT_EXPORT_METHOD(pickDocument:(RCTPromiseResolveBlock)resolve
+                       rejecter:(RCTPromiseRejectBlock)reject)
+{
+  dispatch_async(dispatch_get_main_queue(), ^{
+    UIViewController *root = [self topViewController];
+    if (root == nil) {
+      reject(@"NO_VC", @"无法获取当前视图控制器", nil);
+      return;
+    }
+
+    // 已有选择器在展示时拒绝新请求，避免同时弹两个
+    if (self.pickResolve != nil) {
+      reject(@"BUSY", @"文件选择器已打开", nil);
+      return;
+    }
+
+    self.pickResolve = resolve;
+    self.pickReject = reject;
+
+    UIDocumentPickerViewController *picker;
+    if (@available(iOS 14.0, *)) {
+      // asCopy:YES 会把文件复制到 App 临时目录，返回的 URL 可直接读取，
+      // 无需再处理 security-scoped resource。
+      picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeItem]
+                                                                           asCopy:YES];
+    } else {
+      picker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.item"]
+                                                                      inMode:UIDocumentPickerModeImport];
+    }
+    picker.delegate = self;
+    picker.allowsMultipleSelection = NO;
+    picker.modalPresentationStyle = UIModalPresentationFormSheet;
+
+    [root presentViewController:picker animated:YES completion:nil];
+  });
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController *)controller
+didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls
+{
+  RCTPromiseResolveBlock resolve = self.pickResolve;
+  self.pickResolve = nil;
+  self.pickReject = nil;
+  if (resolve == nil) return;
+
+  NSURL *url = urls.firstObject;
+  if (url == nil) {
+    resolve(nil);
+    return;
+  }
+  resolve(url.path);
+}
+
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller
+{
+  RCTPromiseResolveBlock resolve = self.pickResolve;
+  self.pickResolve = nil;
+  self.pickReject = nil;
+  if (resolve != nil) resolve(nil);
 }
 
 #pragma mark - 电池优化（iOS 无此概念）

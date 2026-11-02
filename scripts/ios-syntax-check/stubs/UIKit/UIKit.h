@@ -101,4 +101,32 @@ extern NSString *const UIDeviceOrientationDidChangeNotification;
 @property (copy, nullable) NSString *title;
 @end
 
+typedef NSInteger UIDocumentPickerMode;
+enum {
+  UIDocumentPickerModeImport = 0,
+  UIDocumentPickerModeOpen = 1,
+  UIDocumentPickerModeExportToService = 2,
+  UIDocumentPickerModeMoveToService = 3
+};
+
+typedef NSInteger UIModalPresentationStyle;
+static const UIModalPresentationStyle UIModalPresentationFormSheet = 2;
+
+@class UIDocumentPickerViewController;
+@protocol UIDocumentPickerDelegate <NSObject>
+@optional
+- (void)documentPicker:(UIDocumentPickerViewController *)controller
+didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls;
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller;
+@end
+
+@interface UIDocumentPickerViewController : UIViewController
+- (instancetype)initForOpeningContentTypes:(NSArray *)contentTypes
+                                    asCopy:(BOOL)asCopy;
+- (instancetype)initWithDocumentTypes:(NSArray<NSString *> *)allowedUTIs
+                               inMode:(UIDocumentPickerMode)mode;
+@property (weak, nullable) id<UIDocumentPickerDelegate> delegate;
+@property (assign) BOOL allowsMultipleSelection;
+@property (assign) UIModalPresentationStyle modalPresentationStyle;
+@end
 #endif /* LX_STUB_UIKIT_H */
