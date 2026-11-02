@@ -99,12 +99,24 @@ static CGSize LXWindowSize(void)
   return [UIScreen mainScreen].bounds.size;
 }
 
+/// 返回**像素**尺寸，而不是逻辑点值。
+/// 原因：JS 侧 src/utils/windowSizeTools.ts 会再除以 Dimensions.scale，
+/// 如果这里已经返回点值，会被重复缩放成 1/3，导致布局按错误的可用空间计算
+/// （表现为设置页左侧导航占满、内容区被挤扁）。Android 端返回的也是像素。
+static CGSize LXWindowSizeInPixels(void)
+{
+  CGSize points = LXWindowSize();
+  CGFloat scale = [UIScreen mainScreen].scale;
+  if (scale <= 0) scale = 1;
+  return CGSizeMake(points.width * scale, points.height * scale);
+}
+
 - (void)handleOrientationChange:(NSNotification *)notification
 {
   if (!self.hasListeners) return;
 
  dispatch_async(dispatch_get_main_queue(), ^{
-    CGSize size = LXWindowSize();
+    CGSize size = LXWindowSizeInPixels();
     [self sendEventWithName:kWindowSizeEvent body:@{@"width": @(size.width), @"height": @(size.height)}];
   });
 }
@@ -119,7 +131,7 @@ RCT_EXPORT_METHOD(getWindowSize:(RCTPromiseResolveBlock)resolve
                        rejecter:(RCTPromiseRejectBlock)reject)
 {
   dispatch_async(dispatch_get_main_queue(), ^{
-    CGSize size = LXWindowSize();
+    CGSize size = LXWindowSizeInPixels();
     resolve(@{@"width": @(size.width), @"height": @(size.height)});
   });
 }

@@ -39,20 +39,31 @@ export const windowSizeTools = {
     //     for (const handler of this.listeners) handler(size)
     //   })
     // })
-    const size = await getWindowSize()
-    // log.info('win size', size)
-    if (size.width) {
-      this.size = size
+    let size: { width: number, height: number } | null = null
+    try {
+      size = await getWindowSize()
+    } catch {
+      size = null
+    }
+
+    // 原生返回的值不可用时（0、NaN、负数）一律回退到 Dimensions。
+    // 之前只判断 size.width，若原生返回 0 高或异常宽高比，
+    // 会让 isHorizontalMode 误判成横屏，导致竖屏下也渲染出左侧导航栏。
+    const isValid = size != null &&
+      Number.isFinite(size.width) && Number.isFinite(size.height) &&
+      size.width > 0 && size.height > 0
+
+    if (isValid) {
+      this.size = size!
     } else {
       const window = Dimensions.get('window')
-      // log.info('Dimensions window size', window)
       this.size = {
         width: Math.round(window.width),
         height: Math.round(window.height) + (StatusBar.currentHeight ?? 0),
       }
     }
     // console.log('init windowSizeTools')
-    return size
+    return this.size
   },
   setWindowSize(width: number, height: number) {
     this.size = {
