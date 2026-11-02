@@ -1,0 +1,198 @@
+name: iOS Build
+
+# 在 GitHub 的 macOS 虚拟机上编译 iOS，产出未签名 ipa。
+# 产物在 Windows 上用 Sideloadly / AltStore 重签后即可装到自己的 iPhone。
+#
+# 为什么是未签名：CI 上没有你的开发者证书，因此只能做「编译 + 打包」，
+# 签名必须在你自己的机器上用 Apple ID 完成。
+on:
+  workflow_dispatch:
+    inputs:
+      runner_image:
+        description: 'macOS runner 镜像（若 macos-14 已下线，改为 macos-15）'
+        required: false
+        default: 'macos-14'
+        type: choice
+        options:
+          - macos-14
+          - macos-15
+          - macos-13
+  push:
+    branches: [master, dev]
+    paths:
+      - 'ios/**'
+      - 'src/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'react-native.config.js'
+      - '.github/workflows/ios-build.yml'
+
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build unsigned ipa
+    runs-on: ${{ github.event.inputs.runner_image || 'macos-14' }}
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ------------------------------------------------------------------
+      # 关键修复：package-lock.json 里 4 个 fork 依赖被解析成
+      #   git+ssh://git@github.com/lyswhut/...
+      # CI 上没有 SSH key，npm ci 会直接 Permission denied (publickey)。
+      # 用 git 的 insteadOf 把它们重写成 https，这是官方推荐的绕法。
+      # 必须在 npm ci 之前执行。
+      # ------------------------------------------------------------------
+      - name: Rewrite git dependency URLs to HTTPS
+        run: |
+          # 三种形态都要覆盖：lockfile 里是 git+ssh://，npm 传给 git 时可能去掉 git+
+          git config --global url."https://github.com/".insteadOf "git+ssh://git@github.com/"
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          echo "--- 生效的 URL 重写规则 ---"
+          git config --global --get-regexp 'url\..*\.insteadof'
+          echo "--- 验证重写效果 ---"
+          git ls-remote --get-url "git+ssh://git@github.com/lyswhut/react-native-file-system.git"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+
+      - name: Show toolchain versions
+        run: |
+          echo "node  $(node -v)"
+          echo "npm   $(npm -v)"
+          echo "xcode $(xcodebuild -version | head -1)"
+          echo "pods  $(pod --version)"
+          echo "swift $(swift --version 2>/dev/null | head -1 || echo n/a)"
+
+      # 两份 user-api-preload.js 必须始终一致（Android assets 与 iOS Resources）
+      - name: Verify preload script consistency
+        run: |
+          A=android/app/src/main/assets/script/user-api-preload.js
+          B=ios/LxModules/Resources/user-api-preload.js
+          if ! cmp -s "$A" "$B"; then
+            echo "::error::preload 脚本已漂移，请同步后再构建"
+            diff <(md5sum "$A") <(md5sum "$B") || true
+            exit 1
+          fi
+          echo "preload 一致: $(md5sum "$A" | cut -d' ' -f1)"
+
+      - name: Install JS dependencies
+        run: npm ci
+
+      - name: Cache CocoaPods
+        uses: actions/cache@v4
+        with:
+          # 只缓存规格库（--repo-update 的耗时大头）。
+          # 不缓存 ios/Pods：半恢复的 Pods 目录会导致难以排查的构建失败。
+          path: |
+            ~/Library/Caches/CocoaPods
+          key: pods-${{ runner.os }}-${{ hashFiles('ios/Podfile', 'ios/LxModules/LxModules.podspec', 'package-lock.json') }}
+          restore-keys: |
+            pods-${{ runner.os }}-
+
+      - name: Install Pods
+        working-directory: ios
+        run: |
+          pod install --repo-update
+          echo "--- CocoaPods 安装结果 ---"
+          ls -d Pods/*.xcodeproj 2>/dev/null | head -20 || true
+
+      - name: Build (Archive, unsigned)
+        working-directory: ios
+        run: |
+          set -o pipefail
+          rm -rf build
+          mkdir -p build
+          xcodebuild \
+            -workspace LxMusicMobile.xcworkspace \
+            -scheme LxMusicMobile \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/LxMusicMobile.xcarchive \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            DEVELOPMENT_TEAM="" \
+            archive
+
+      - name: Package unsigned ipa
+        working-directory: ios
+        run: |
+          set -euo pipefail
+          APP=build/LxMusicMobile.xcarchive/Products/Applications/LxMusicMobile.app
+          if [ ! -d "$APP" ]; then
+            echo "::error::未找到 LxMusicMobile.app，archive 可能失败"
+            find build -maxdepth 4 -name '*.app' -print || true
+            exit 1
+          fi
+          rm -rf build/Payload
+          mkdir -p build/Payload
+          cp -R "$APP" build/Payload/
+          (cd build && zip -qry LxMusicMobile-unsigned.ipa Payload)
+          rm -rf build/Payload
+          ls -lh build/LxMusicMobile-unsigned.ipa
+          echo "IPA_SIZE=$(du -h build/LxMusicMobile-unsigned.ipa | cut -f1)" >> "$GITHUB_ENV"
+
+      - name: Job summary
+        if: success()
+        run: |
+          {
+            echo "## ✅ iOS 构建成功"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "|---|---|"
+            echo "| 产物 | \`LxMusicMobile-unsigned.ipa\` |"
+            echo "| 大小 | ${{ env.IPA_SIZE }} |"
+            echo "| Runner | \`${{ github.event.inputs.runner_image || 'macos-14' }}\` |"
+            echo "| Commit | \`${{ github.sha }}\` |"
+            echo ""
+            echo "### 下一步"
+            echo "1. 在本页底部 Artifacts 下载 \`LxMusicMobile-unsigned-ipa\`"
+            echo "2. Windows 上打开 Sideloadly，用 Apple ID 登录"
+            echo "3. 拖入 ipa → 连接 iPhone → Start"
+            echo "4. iPhone 设置 → 通用 → VPN与设备管理 → 信任证书"
+            echo ""
+            echo "> 免费 Apple ID 签名有效期 7 天，到期重签即可。"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload unsigned ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: LxMusicMobile-unsigned-ipa
+          path: ios/build/LxMusicMobile-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Report failure
+        if: failure()
+        run: |
+          {
+            echo "## ❌ 构建失败"
+            echo ""
+            echo "请把出错的 step 日志（或日志末尾 100 行）贴回对话，我按报错修复。"
+            echo ""
+            echo "常见原因见仓库 \`doc/ios-port/DELIVERY.md\` 第五节。"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            ios/build/**/*.log
+            ios/Pods/Manifest.lock
+          if-no-files-found: warn
+          retention-days: 7
