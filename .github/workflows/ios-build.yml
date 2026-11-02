@@ -125,6 +125,12 @@ jobs:
           CONFIG=$([ "${{ github.event.inputs.build_type }}" = "debug" ] && echo Debug || echo Release)
           echo "BUILD_CONFIG=$CONFIG" >> "$GITHUB_ENV"
           echo "构建配置: $CONFIG"
+          # RN 默认会给「真机 Debug」也打 main.jsbundle；
+          # debug 版必须跳过，否则会让人误以为热更新没生效。
+          if [ "$CONFIG" = "Debug" ]; then
+            export SKIP_BUNDLING=1
+            echo "已设置 SKIP_BUNDLING=1（不内嵌 JS，走 Metro）"
+          fi
           xcodebuild \
             -workspace LxMusicMobile.xcworkspace \
             -scheme LxMusicMobile \
